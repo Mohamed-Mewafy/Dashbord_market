@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>تفاصيل المنتج</title>
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.1.1/css/all.min.css">
+    <link rel="stylesheet" href="style.css"> 
+    <link rel="stylesheet" href="product.css"> 
+</head>
+<body>
+    <div id="productDetailContainer" class="container">
+        <header>
+            <div class="store-info">
+                <a href="/" class="back-link"><h1><i class="fas fa-store"></i> متجر EGFlix</h1></a>
+            </div>
+            <div class="user-info">
+                <span id="userEmail"></span>
+                <button id="logoutBtn" class="btn btn-danger"><i class="fas fa-sign-out-alt"></i></button>
+            </div>
+        </header>
+
+        <main id="productContent">
+            <!-- Product details will be loaded here -->
+            <div class="loading-spinner">
+                <i class="fas fa-spinner fa-spin"></i>
+                <p>جاري تحميل بيانات المنتج...</p>
+            </div>
+        </main>
+    </div>
+
+    <!-- Firebase Libraries -->
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-auth-compat.js"></script>
+
+    <!-- Your Custom Script -->
+    <script src="product-viewer.js"></script>
+</body>
+</html>

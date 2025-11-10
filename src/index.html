@@ -1,0 +1,104 @@
+<!DOCTYPE html>
+<html lang="ar" dir="rtl">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mohamed Esam</title>
+    <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.1.1/css/all.min.css">
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+    <div id="authContainer" class="container">
+        <form id="loginForm">
+            <h2><i class="fas fa-lock"></i> تسجيل الدخول للوحة التحكم</h2>
+            <p id="loginError" style="color:red;"></p>
+            <input type="email" id="email" placeholder="البريد الإلكتروني" required>
+            <input type="password" id="password" placeholder="كلمة المرور" required>
+            <button type="submit" class="btn btn-primary" style="width:100%">دخول <i class="fas fa-sign-in-alt"></i></button>
+        </form>
+    </div>
+
+    <div id="dashboardContainer" class="container">
+        <header>
+            <div class="store-info">
+                <h1><i class="fas fa-store"></i> متجر EGFlix</h1>
+            </div>
+             <div class="search-bar">
+                <i class="fas fa-search"></i>
+                <input type="text" id="searchInput" placeholder="ابحث عن منتج بالاسم...">
+            </div>
+            <div class="user-info">
+                 <span id="userEmail"></span>
+                 <button id="logoutBtn" class="btn btn-danger"><i class="fas fa-sign-out-alt"></i></button>
+            </div>
+        </header>
+
+        <main>
+            <div class="main-header">
+                 <h2><i class="fas fa-chart-pie"></i> نظرة عامة</h2>
+                 <button id="addProductBtn" class="btn btn-primary"><i class="fas fa-plus"></i> إضافة منتج جديد</button>
+            </div>
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="icon purple"><i class="fas fa-box-open"></i></div>
+                    <div class="info">
+                        <h3>إجمالي المنتجات</h3>
+                        <p id="totalProducts">0</p>
+                    </div>
+                </div>
+                <div class="stat-card">
+                    <div class="icon green"><i class="fas fa-eye"></i></div>
+                    <div class="info">
+                        <h3>زيارات الموقع</h3>
+                        <p id="siteVisits">0</p>
+                    </div>
+                </div>
+            </div>
+
+            <div class="chart-container">
+                 <canvas id="salesChart"></canvas>
+            </div>
+
+            <div class="product-area">
+                <div style="display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 15px; margin-bottom: 20px;">
+                    <h2><i class="fas fa-boxes-stacked"></i> قائمة المنتجات</h2>
+                    <button id="cleanupBtn" class="btn btn-danger" style="display: none;"><i class="fas fa-broom"></i> تنظيف المنتجات القديمة</button>
+                </div>
+                <p style="font-size: 0.9em; color: var(--muted-font-color); margin-top: -10px; margin-bottom: 20px;">ملاحظة: أزرار التحكم (تعديل، حذف، تغيير الحالة) تظهر فقط للمنتجات التي قمت بإضافتها بنفسك.</p>
+                <div id="productGrid">
+                    <!-- Product cards will be injected here -->
+                </div>
+            </div>
+        </main>
+    </div>
+
+    <!-- The Modal -->
+    <div id="productModal" class="modal">
+         <div class="modal-content">
+            <span class="close-btn">&times;</span>
+            <h2 id="formTitle">إضافة منتج</h2>
+            <form id="productForm">
+                <input type="hidden" id="productId">
+                <input type="text" id="productName" placeholder="اسم المنتج" required>
+                <input type="number" id="productPrice" placeholder="سعر المنتج" step="0.01" required>
+                <input type="number" id="productQuantity" placeholder="الكمية المتاحة" min="0" required>
+                <input type="text" id="productImage" placeholder="رابط صورة المنتج" required>
+                <textarea id="productDescription" placeholder="وصف المنتج (اختياري)" rows="3"></textarea>
+                <button type="submit" id="submitButton" class="btn btn-primary" style="width: 100%;">حفظ</button>
+            </form>
+        </div>
+    </div>
+
+    <!-- Firebase Libraries -->
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.6.1/firebase-auth-compat.js"></script>
+
+    <!-- Chart.js Library -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+
+    <!-- Your Custom Script -->
+    <script src="script.js"></script>
+</body>
+</html>

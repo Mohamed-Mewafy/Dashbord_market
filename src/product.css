@@ -1,0 +1,119 @@
+body {
+    background-color: var(--background-color, #F3F4F6);
+}
+
+.back-link {
+    text-decoration: none;
+    color: inherit;
+}
+
+#productContent {
+    background-color: var(--card-bg-color, #FFFFFF);
+    padding: 30px;
+    border-radius: 12px;
+    box-shadow: 0 4px 15px var(--shadow-color, rgba(0,0,0,0.05));
+    margin-top: 20px;
+}
+
+.product-layout {
+    display: grid;
+    grid-template-columns: 1fr 1.5fr;
+    gap: 40px;
+    align-items: flex-start;
+}
+
+.product-image-gallery img {
+    width: 100%;
+    border-radius: 12px;
+    box-shadow: 0 4px 15px var(--shadow-hover, rgba(0,0,0,0.1));
+    object-fit: cover;
+    max-height: 500px;
+}
+
+.product-details h1 {
+    font-size: 2.5em;
+    margin: 0 0 15px;
+    color: var(--primary-color, #4F46E5);
+}
+
+.product-details .price {
+    font-size: 2em;
+    font-weight: 700;
+    color: var(--font-color, #1F2937);
+    margin-bottom: 20px;
+}
+
+.product-details .status {
+    font-size: 1.2em;
+    font-weight: 600;
+    margin-bottom: 20px;
+}
+.product-details .status.available {
+    color: var(--secondary-color, #10B981);
+}
+.product-details .status.unavailable {
+    color: var(--muted-font-color, #6B7280);
+}
+
+.description {
+    font-size: 1.1em;
+    line-height: 1.7;
+    color: var(--muted-font-color, #6B7280);
+    margin-bottom: 30px;
+}
+
+.ai-section {
+    background-color: #F9FAFB; /* Cool Gray 50 */
+    border: 1px solid var(--border-color, #E5E7EB);
+    border-radius: 12px;
+    padding: 25px;
+    margin-top: 30px;
+}
+
+.ai-header {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    margin-bottom: 20px;
+}
+
+.ai-header h2 {
+    margin: 0;
+    font-size: 1.5em;
+    color: var(--primary-color, #4F46E5);
+}
+
+#generateAiDescriptionBtn {
+    background-color: var(--warning-color, #F59E0B);
+    color: white;
+}
+#generateAiDescriptionBtn:hover {
+    background-color: var(--warning-hover, #D97706);
+}
+
+#aiDescription {
+    font-size: 1.1em;
+    line-height: 1.8;
+    color: var(--font-color, #1F2937);
+    white-space: pre-wrap; /* Preserves formatting */
+}
+
+.loading-spinner {
+    display: flex; 
+    flex-direction: column; 
+    align-items: center; 
+    justify-content: center; 
+    padding: 50px;
+    font-size: 1.5em;
+    color: var(--muted-font-color, #6B7280);
+}
+.loading-spinner i {
+    font-size: 2em;
+    margin-bottom: 15px;
+}
+
+@media (max-width: 900px) {
+    .product-layout {
+        grid-template-columns: 1fr;
+    }
+}
