@@ -79,42 +79,84 @@ def product_page():
     return app.send_static_file('product.html')
 
 
-@app.route('/api/products', methods=['GET', 'POST'])
+@app.route("/api/products", methods=['GET', 'POST'])
 def handle_products():
     products_ref = db.collection('products')
     if request.method == 'POST':
-        data = request.get_json() or {}
-        quantity = int(data.get('quantity', 0))
-        data['quantity'] = quantity
-        data['status'] = 'available' if quantity > 0 else 'unavailable'
-        # require authenticated user
-        creator = getattr(request, 'user', None)
-        if not creator:
-            return jsonify({"msg": "Unauthorized"}), 401
-        data['creator_uid'] = creator.get('uid')
-        data['added_by'] = creator.get('email')
-        data['created_at'] = firestore.SERVER_TIMESTAMP
-        _, ref = products_ref.add(data)
-        new_product = ref.get().to_dict()
-        new_product['id'] = ref.id
-        return jsonify(new_product), 201
+        try:
+            data = request.get_json() or {}
+            quantity = int(data.get('quantity', 0))
+            data['quantity'] = quantity
+            data['status'] = 'available' if quantity > 0 else 'unavailable'
+            creator = getattr(request, 'user', None)
+            if not creator:
+                return jsonify({"msg": "Unauthorized"}), 401
+            data['creator_uid'] = creator.get('uid')
+            data['added_by'] = creator.get('email')
+            data['created_at'] = firestore.SERVER_TIMESTAMP
+            _, ref = products_ref.add(data)
+            new_product = ref.get().to_dict()
+            new_product['id'] = ref.id
+            return jsonify(new_product), 201
+        except Exception as e:
+            # Log full traceback to stdout/stderr so Railway logs capture it
+            import traceback
+            tb = traceback.format_exc()
+            print("ERROR in POST /api/products:", tb)
+            return jsonify({"msg": "Failed to create product", "error": str(e)}), 500
+
     else:
-        creator = getattr(request, 'user', None)
-        if not creator:
-            return jsonify({"msg": "Unauthorized"}), 401
-        docs = products_ref.where('creator_uid', '==', creator.get('uid')).order_by('created_at', direction=firestore.Query.DESCENDING).stream()
-        products = []
-        for doc in docs:
-            p = doc.to_dict()
-            p['id'] = doc.id
-            if 'created_at' in p and p['created_at']:
+        # GET
+        try:
+            creator = getattr(request, 'user', None)
+            if not creator:
+                return jsonify({"msg": "Unauthorized"}), 401
+
+            # Build the query
+            uid = creator.get('uid')
+            # Use try/except around the streaming to capture Firestore errors
+            try:
+                # If you have many docs, consider paginating instead of pulling all
+                query = products_ref.where('creator_uid', '==', uid).order_by('created_at', direction=firestore.Query.DESCENDING)
+                docs = list(query.stream())  # materialize to catch exceptions here
+            except Exception as e_q:
+                import traceback
+                tb_q = traceback.format_exc()
+                print("ERROR during Firestore query in GET /api/products:", tb_q)
+                # Fallback: try without ordering
                 try:
-                    p['created_at'] = p['created_at'].timestamp()
-                except Exception:
-                    # If timestamp conversion fails, leave raw value
-                    pass
-            products.append(p)
-        return jsonify(products)
+                    docs = list(products_ref.where('creator_uid', '==', uid).stream())
+                except Exception as e_q2:
+                    tb_q2 = traceback.format_exc()
+                    print("ERROR fallback query in GET /api/products:", tb_q2)
+                    return jsonify({"msg": "Failed to query products", "error": str(e_q2)}), 500
+
+            products = []
+            for doc in docs:
+                try:
+                    p = doc.to_dict()
+                    p['id'] = doc.id
+                    if 'created_at' in p and p['created_at']:
+                        try:
+                            p['created_at'] = p['created_at'].timestamp()
+                        except Exception:
+                            # leave it as-is if conversion fails
+                            pass
+                    products.append(p)
+                except Exception as e_doc:
+                    import traceback
+                    tb_doc = traceback.format_exc()
+                    print(f"ERROR processing doc {doc.id}:", tb_doc)
+                    # skip problematic doc but continue
+                    continue
+
+            return jsonify(products)
+        except Exception as e:
+            import traceback
+            tb = traceback.format_exc()
+            print("Unhandled ERROR in GET /api/products:", tb)
+            return jsonify({"msg": "Internal server error", "error": str(e)}), 500
+
 
 
 @app.route('/api/products/<string:product_id>', methods=['GET', 'PUT', 'DELETE'])
