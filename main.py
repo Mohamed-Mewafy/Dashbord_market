@@ -1,10 +1,12 @@
 import os
 import json
 import random
+import traceback
 import firebase_admin
 import google.generativeai as genai
 from firebase_admin import credentials, firestore, auth
 from flask import Flask, send_file, jsonify, request
+from flask_cors import CORS
 from dotenv import load_dotenv
 
 # Load environment variables from .env file (for local development)
@@ -36,35 +38,47 @@ db = firestore.client()
 # --------- Gemini / Google generative AI config ---------
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
-    raise ValueError("GEMINI_API_KEY not found in environment variables. Please set it in Railway variables or .env file.")
-
-# Configure the google generative AI client
-genai.configure(api_key=GEMINI_API_KEY)
-model = genai.GenerativeModel("gemini-1.5-flash")
+    # For local dev you can skip if you won't call AI endpoints, but production expects it.
+    print("Warning: GEMINI_API_KEY not set. /api/generate-description will fail without it.")
+else:
+    # Configure the google generative AI client (if you have key)
+    genai.configure(api_key=GEMINI_API_KEY)
+    model = genai.GenerativeModel("gemini-1.5-flash")
 
 # --------- Flask app ---------
 app = Flask(__name__, static_folder='src', static_url_path='/')
+CORS_ALLOWED_ORIGINS = os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:3000,https://your-site.vercel.app")
+allowed_list = [o.strip() for o in CORS_ALLOWED_ORIGINS.split(",") if o.strip()]
+CORS(app, origins=allowed_list, supports_credentials=True)
+
 app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", os.urandom(24))
 
-# simple auth check for /api routes using Firebase ID tokens
+# ----- AUTH: allow public GET /api/products when ALLOW_PUBLIC_READ=true -----
 @app.before_request
 def verify_token():
-    # Only protect /api endpoints (except OPTIONS preflight and explicitly allowed endpoints)
+    allow_public_read = os.getenv("ALLOW_PUBLIC_READ", "false").lower() in ("1", "true", "yes")
+
+    # Only protect /api endpoints (except preflight OPTIONS)
     if request.path.startswith('/api') and request.method != 'OPTIONS':
-        # NOTE: /api/cleanup-old-products is left unprotected here for convenience in your dev flow.
-        # In production you MUST protect or remove it.
+        # keep cleanup endpoint special-case as in your original code
         if request.path == '/api/cleanup-old-products':
             return
 
+        # If allowed and this is public GET for products, skip auth
+        if allow_public_read and request.path == '/api/products' and request.method == 'GET':
+            return
+
+        # For all other /api endpoints require Firebase ID token
         auth_header = request.headers.get('Authorization')
         if not auth_header or not auth_header.startswith('Bearer '):
             return jsonify({"msg": "Missing or invalid authorization token"}), 401
         try:
             id_token = auth_header.split('Bearer ')[1]
             decoded_token = auth.verify_id_token(id_token)
-            # Attach user info to request for handlers
             request.user = decoded_token
         except Exception as e:
+            # Log for debugging
+            print("Token verification failed:", e)
             return jsonify({"msg": f"Invalid token: {e}"}), 401
 
 
@@ -85,6 +99,7 @@ def handle_products():
     if request.method == 'POST':
         try:
             data = request.get_json() or {}
+            # ensure numeric quantity
             quantity = int(data.get('quantity', 0))
             data['quantity'] = quantity
             data['status'] = 'available' if quantity > 0 else 'unavailable'
@@ -99,8 +114,6 @@ def handle_products():
             new_product['id'] = ref.id
             return jsonify(new_product), 201
         except Exception as e:
-            # Log full traceback to stdout/stderr so Railway logs capture it
-            import traceback
             tb = traceback.format_exc()
             print("ERROR in POST /api/products:", tb)
             return jsonify({"msg": "Failed to create product", "error": str(e)}), 500
@@ -108,28 +121,25 @@ def handle_products():
     else:
         # GET
         try:
-            creator = getattr(request, 'user', None)
-            if not creator:
-                return jsonify({"msg": "Unauthorized"}), 401
-
-            # Build the query
-            uid = creator.get('uid')
-            # Use try/except around the streaming to capture Firestore errors
-            try:
-                # If you have many docs, consider paginating instead of pulling all
-                query = products_ref.where('creator_uid', '==', uid).order_by('created_at', direction=firestore.Query.DESCENDING)
-                docs = list(query.stream())  # materialize to catch exceptions here
-            except Exception as e_q:
-                import traceback
-                tb_q = traceback.format_exc()
-                print("ERROR during Firestore query in GET /api/products:", tb_q)
-                # Fallback: try without ordering
+            # If public read is enabled, return all products (or you might prefer to return only public fields)
+            allow_public_read = os.getenv("ALLOW_PUBLIC_READ", "false").lower() in ("1", "true", "yes")
+            if allow_public_read:
+                # return all products (consider filtering or limiting fields if you want)
                 try:
+                    docs = list(products_ref.order_by('created_at', direction=firestore.Query.DESCENDING).stream())
+                except Exception:
+                    # fallback if ordering fails (e.g., created_at missing)
+                    docs = list(products_ref.stream())
+            else:
+                # protected: return products for authenticated user only
+                creator = getattr(request, 'user', None)
+                if not creator:
+                    return jsonify({"msg": "Unauthorized"}), 401
+                uid = creator.get('uid')
+                try:
+                    docs = list(products_ref.where('creator_uid', '==', uid).order_by('created_at', direction=firestore.Query.DESCENDING).stream())
+                except Exception:
                     docs = list(products_ref.where('creator_uid', '==', uid).stream())
-                except Exception as e_q2:
-                    tb_q2 = traceback.format_exc()
-                    print("ERROR fallback query in GET /api/products:", tb_q2)
-                    return jsonify({"msg": "Failed to query products", "error": str(e_q2)}), 500
 
             products = []
             for doc in docs:
@@ -140,23 +150,17 @@ def handle_products():
                         try:
                             p['created_at'] = p['created_at'].timestamp()
                         except Exception:
-                            # leave it as-is if conversion fails
                             pass
                     products.append(p)
                 except Exception as e_doc:
-                    import traceback
-                    tb_doc = traceback.format_exc()
-                    print(f"ERROR processing doc {doc.id}:", tb_doc)
-                    # skip problematic doc but continue
+                    print(f"ERROR processing doc {doc.id}:", traceback.format_exc())
                     continue
 
             return jsonify(products)
         except Exception as e:
-            import traceback
             tb = traceback.format_exc()
             print("Unhandled ERROR in GET /api/products:", tb)
             return jsonify({"msg": "Internal server error", "error": str(e)}), 500
-
 
 
 @app.route('/api/products/<string:product_id>', methods=['GET', 'PUT', 'DELETE'])
@@ -226,6 +230,9 @@ def generate_ai_description():
     if not product_name:
         return jsonify({"msg": "Product name is required"}), 400
     try:
+        if not GEMINI_API_KEY:
+            return jsonify({"msg": "GEMINI_API_KEY not configured"}), 500
+
         prompt = f'''Create a compelling, professional, and enticing marketing description for a product named "{product_name}".
 
         The description should:
@@ -238,11 +245,10 @@ def generate_ai_description():
         Generate the description now.'''
 
         response = model.generate_content(prompt)
-        # Depending on the version of google.generativeai client you use, response object shape may differ.
-        # The above works if the client returns an object with .text attribute. If not, inspect response.
         text = getattr(response, 'text', None) or str(response)
         return jsonify({"description": text})
     except Exception as e:
+        print("AI generation error:", traceback.format_exc())
         return jsonify({"msg": f"Failed to generate description: {e}"}), 500
 
 
@@ -257,6 +263,7 @@ def cleanup_old_products():
             deleted_count += 1
         return jsonify({"msg": f"Cleanup successful. Deleted {deleted_count} ownerless products."})
     except Exception as e:
+        print("Cleanup error:", traceback.format_exc())
         return jsonify({"msg": str(e)}), 500
 
 
