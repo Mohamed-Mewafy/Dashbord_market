@@ -1,272 +1,142 @@
 import os
 import json
 import random
-import traceback
 import firebase_admin
 import google.generativeai as genai
 from firebase_admin import credentials, firestore, auth
-from flask import Flask, send_file, jsonify, request
+from flask import Flask, jsonify, request
 from flask_cors import CORS
 from dotenv import load_dotenv
 
-# Load environment variables from .env file (for local development)
+# -----------------------------------------------------------
+# تحميل متغيرات البيئة
+# -----------------------------------------------------------
 load_dotenv()
 
-# --------- Firebase initialization (load service account from env) ---------
+# -----------------------------------------------------------
+# إعداد Firebase
+# -----------------------------------------------------------
 FIREBASE_SA_JSON = os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON")
+
 if FIREBASE_SA_JSON:
     try:
         sa_info = json.loads(FIREBASE_SA_JSON)
         cred = credentials.Certificate(sa_info)
     except Exception as e:
-        raise RuntimeError(f"Failed to parse FIREBASE_SERVICE_ACCOUNT_JSON: {e}")
+        raise RuntimeError(f"فشل تحميل بيانات الخدمة: {e}")
 else:
-    # fallback to local path only for dev; do NOT commit firebase-service-account.json to GitHub
     cred_path = os.getenv("FIREBASE_SERVICE_ACCOUNT_PATH", "firebase-service-account.json")
     if not os.path.exists(cred_path):
-        raise RuntimeError(
-            "Firebase service account not found. Set FIREBASE_SERVICE_ACCOUNT_JSON or provide firebase-service-account.json"
-        )
+        raise RuntimeError("لم يتم العثور على بيانات Firebase Service Account.")
     cred = credentials.Certificate(cred_path)
 
-# initialize app only once (safe if running in dev with auto-reload)
 if not firebase_admin._apps:
     firebase_admin.initialize_app(cred)
 
 db = firestore.client()
 
-# --------- Gemini / Google generative AI config ---------
+# -----------------------------------------------------------
+# إعداد Gemini API
+# -----------------------------------------------------------
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 if not GEMINI_API_KEY:
-    # For local dev you can skip if you won't call AI endpoints, but production expects it.
-    print("Warning: GEMINI_API_KEY not set. /api/generate-description will fail without it.")
-else:
-    # Configure the google generative AI client (if you have key)
-    genai.configure(api_key=GEMINI_API_KEY)
-    model = genai.GenerativeModel("gemini-1.5-flash")
+    raise ValueError("يرجى إضافة GEMINI_API_KEY إلى متغيرات البيئة.")
+genai.configure(api_key=GEMINI_API_KEY)
+model = genai.GenerativeModel("gemini-1.5-flash")
 
-# --------- Flask app ---------
+# -----------------------------------------------------------
+# إنشاء تطبيق Flask
+# -----------------------------------------------------------
 app = Flask(__name__, static_folder='src', static_url_path='/')
-CORS_ALLOWED_ORIGINS = os.getenv("CORS_ALLOWED_ORIGINS", "http://localhost:3000,https://your-site.vercel.app")
-allowed_list = [o.strip() for o in CORS_ALLOWED_ORIGINS.split(",") if o.strip()]
-CORS(app, origins=allowed_list, supports_credentials=True)
-
 app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", os.urandom(24))
 
-# ----- AUTH: allow public GET /api/products when ALLOW_PUBLIC_READ=true -----
-@app.before_request
-def verify_token():
-    allow_public_read = os.getenv("ALLOW_PUBLIC_READ", "false").lower() in ("1", "true", "yes")
+# -----------------------------------------------------------
+# إعدادات CORS للسماح باتصال InfinityFree وVercel
+# -----------------------------------------------------------
+CORS_ALLOWED_ORIGINS = [
+    "http://localhost:3000",
+    "https://your-site.vercel.app",
+    "https://ports3low.epizy.com",  # 🔥 موقعك على InfinityFree
+    "https://*.epizy.com"
+]
 
-    # Only protect /api endpoints (except preflight OPTIONS)
-    if request.path.startswith('/api') and request.method != 'OPTIONS':
-        # keep cleanup endpoint special-case as in your original code
-        if request.path == '/api/cleanup-old-products':
-            return
-
-        # If allowed and this is public GET for products, skip auth
-        if allow_public_read and request.path == '/api/products' and request.method == 'GET':
-            return
-
-        # For all other /api endpoints require Firebase ID token
-        auth_header = request.headers.get('Authorization')
-        if not auth_header or not auth_header.startswith('Bearer '):
-            return jsonify({"msg": "Missing or invalid authorization token"}), 401
-        try:
-            id_token = auth_header.split('Bearer ')[1]
-            decoded_token = auth.verify_id_token(id_token)
-            request.user = decoded_token
-        except Exception as e:
-            # Log for debugging
-            print("Token verification failed:", e)
-            return jsonify({"msg": f"Invalid token: {e}"}), 401
+app.config['CORS_HEADERS'] = 'Content-Type'
+CORS(app, origins=CORS_ALLOWED_ORIGINS, supports_credentials=True)
+# -----------------------------------------------------------
 
 
-# --------- Routes ---------
+# -----------------------------------------------------------
+# المسارات (Endpoints)
+# -----------------------------------------------------------
+
 @app.route('/')
 def index():
-    return app.send_static_file('index.html')
+    return jsonify({"msg": "API يعمل بنجاح 🚀"})
 
 
-@app.route('/product')
-def product_page():
-    return app.send_static_file('product.html')
-
-
+# 🧩 عرض المنتجات أو إضافة منتج جديد
 @app.route("/api/products", methods=['GET', 'POST'])
 def handle_products():
     products_ref = db.collection('products')
-    if request.method == 'POST':
+
+    # ✅ السماح بقراءة عامة بدون توثيق (GET فقط)
+    if request.method == 'GET':
         try:
+            docs = list(products_ref.stream())
+            products = []
+            for doc in docs:
+                p = doc.to_dict()
+                p['id'] = doc.id
+                if 'created_at' in p and p['created_at']:
+                    try:
+                        p['created_at'] = p['created_at'].timestamp()
+                    except Exception:
+                        pass
+                products.append(p)
+            return jsonify(products)
+        except Exception as e:
+            return jsonify({"msg": f"خطأ في جلب المنتجات: {e}"}), 500
+
+    # 🔒 إضافة منتج جديد (تتطلب توثيق Firebase)
+    if request.method == 'POST':
+        auth_header = request.headers.get('Authorization')
+        if not auth_header or not auth_header.startswith('Bearer '):
+            return jsonify({"msg": "ممنوع بدون توثيق"}), 401
+        try:
+            id_token = auth_header.split('Bearer ')[1]
+            decoded_token = auth.verify_id_token(id_token)
             data = request.get_json() or {}
-            # ensure numeric quantity
-            quantity = int(data.get('quantity', 0))
-            data['quantity'] = quantity
-            data['status'] = 'available' if quantity > 0 else 'unavailable'
-            creator = getattr(request, 'user', None)
-            if not creator:
-                return jsonify({"msg": "Unauthorized"}), 401
-            data['creator_uid'] = creator.get('uid')
-            data['added_by'] = creator.get('email')
+            data['creator_uid'] = decoded_token.get('uid')
+            data['added_by'] = decoded_token.get('email')
             data['created_at'] = firestore.SERVER_TIMESTAMP
             _, ref = products_ref.add(data)
             new_product = ref.get().to_dict()
             new_product['id'] = ref.id
             return jsonify(new_product), 201
         except Exception as e:
-            tb = traceback.format_exc()
-            print("ERROR in POST /api/products:", tb)
-            return jsonify({"msg": "Failed to create product", "error": str(e)}), 500
-
-    else:
-        # GET
-        try:
-            # If public read is enabled, return all products (or you might prefer to return only public fields)
-            allow_public_read = os.getenv("ALLOW_PUBLIC_READ", "false").lower() in ("1", "true", "yes")
-            if allow_public_read:
-                # return all products (consider filtering or limiting fields if you want)
-                try:
-                    docs = list(products_ref.order_by('created_at', direction=firestore.Query.DESCENDING).stream())
-                except Exception:
-                    # fallback if ordering fails (e.g., created_at missing)
-                    docs = list(products_ref.stream())
-            else:
-                # protected: return products for authenticated user only
-                creator = getattr(request, 'user', None)
-                if not creator:
-                    return jsonify({"msg": "Unauthorized"}), 401
-                uid = creator.get('uid')
-                try:
-                    docs = list(products_ref.where('creator_uid', '==', uid).order_by('created_at', direction=firestore.Query.DESCENDING).stream())
-                except Exception:
-                    docs = list(products_ref.where('creator_uid', '==', uid).stream())
-
-            products = []
-            for doc in docs:
-                try:
-                    p = doc.to_dict()
-                    p['id'] = doc.id
-                    if 'created_at' in p and p['created_at']:
-                        try:
-                            p['created_at'] = p['created_at'].timestamp()
-                        except Exception:
-                            pass
-                    products.append(p)
-                except Exception as e_doc:
-                    print(f"ERROR processing doc {doc.id}:", traceback.format_exc())
-                    continue
-
-            return jsonify(products)
-        except Exception as e:
-            tb = traceback.format_exc()
-            print("Unhandled ERROR in GET /api/products:", tb)
-            return jsonify({"msg": "Internal server error", "error": str(e)}), 500
+            return jsonify({"msg": f"فشل إضافة المنتج: {e}"}), 500
 
 
-@app.route('/api/products/<string:product_id>', methods=['GET', 'PUT', 'DELETE'])
-def handle_product(product_id):
-    product_ref = db.collection('products').document(product_id)
-    doc = product_ref.get()
-    if not doc.exists:
-        return jsonify({"msg": "Product not found"}), 404
-
-    product_data = doc.to_dict()
-    user = getattr(request, 'user', None)
-    if not user:
-        return jsonify({"msg": "Unauthorized"}), 401
-
-    is_owner = product_data.get('creator_uid') == user.get('uid')
-
-    if request.method == 'GET':
-        product_data['id'] = doc.id
-        if 'created_at' in product_data and product_data['created_at']:
+# 🧩 عرض تفاصيل منتج محدد
+@app.route('/api/products/<string:product_id>', methods=['GET'])
+def get_product(product_id):
+    try:
+        doc = db.collection('products').document(product_id).get()
+        if not doc.exists:
+            return jsonify({"msg": "المنتج غير موجود"}), 404
+        product = doc.to_dict()
+        product['id'] = doc.id
+        if 'created_at' in product and product['created_at']:
             try:
-                product_data['created_at'] = product_data['created_at'].timestamp()
+                product['created_at'] = product['created_at'].timestamp()
             except Exception:
                 pass
-        return jsonify(product_data)
-
-    if not is_owner:
-        return jsonify({"msg": "Forbidden: You are not the owner of this product."}), 403
-
-    if request.method == 'PUT':
-        update_data = request.get_json() or {}
-        if 'quantity' in update_data:
-            quantity = int(update_data['quantity'])
-            update_data['quantity'] = quantity
-            update_data['status'] = 'available' if quantity > 0 else 'unavailable'
-        product_ref.update(update_data)
-        updated_doc = product_ref.get().to_dict()
-        updated_doc['id'] = product_ref.id
-        return jsonify(updated_doc)
-
-    if request.method == 'DELETE':
-        product_ref.delete()
-        return '', 204
-
-
-@app.route('/api/products/<string:product_id>/status', methods=['PUT'])
-def handle_product_status(product_id):
-    product_ref = db.collection('products').document(product_id)
-    doc = product_ref.get()
-    if not doc.exists:
-        return jsonify({"msg": "Product not found"}), 404
-    product_data = doc.to_dict()
-    user = getattr(request, 'user', None)
-    if not user:
-        return jsonify({"msg": "Unauthorized"}), 401
-    if product_data.get('creator_uid') != user.get('uid'):
-        return jsonify({"msg": "Forbidden"}), 403
-    req_data = request.get_json() or {}
-    if req_data.get('status') == 'available' and product_data.get('quantity', 0) == 0:
-        return jsonify({"msg": "Cannot make product available with zero quantity"}), 400
-    product_ref.update({'status': req_data['status']})
-    return jsonify({"status": "success"})
-
-
-@app.route('/api/generate-description', methods=['POST'])
-def generate_ai_description():
-    product_name = (request.json or {}).get('product_name')
-    if not product_name:
-        return jsonify({"msg": "Product name is required"}), 400
-    try:
-        if not GEMINI_API_KEY:
-            return jsonify({"msg": "GEMINI_API_KEY not configured"}), 500
-
-        prompt = f'''Create a compelling, professional, and enticing marketing description for a product named "{product_name}".
-
-        The description should:
-        - Be written in Arabic.
-        - Be 2-3 paragraphs long.
-        - Highlight the key benefits and unique selling points.
-        - Use a tone that is both exciting and trustworthy.
-        - End with a strong call to action.
-
-        Generate the description now.'''
-
-        response = model.generate_content(prompt)
-        text = getattr(response, 'text', None) or str(response)
-        return jsonify({"description": text})
+        return jsonify(product)
     except Exception as e:
-        print("AI generation error:", traceback.format_exc())
-        return jsonify({"msg": f"Failed to generate description: {e}"}), 500
+        return jsonify({"msg": f"حدث خطأ أثناء جلب المنتج: {e}"}), 500
 
 
-@app.route('/api/cleanup-old-products', methods=['POST'])
-def cleanup_old_products():
-    # TEMPORARY: This endpoint is not protected — secure or remove it in production!
-    try:
-        docs = db.collection('products').where('creator_uid', '==', None).stream()
-        deleted_count = 0
-        for doc in docs:
-            doc.reference.delete()
-            deleted_count += 1
-        return jsonify({"msg": f"Cleanup successful. Deleted {deleted_count} ownerless products."})
-    except Exception as e:
-        print("Cleanup error:", traceback.format_exc())
-        return jsonify({"msg": str(e)}), 500
-
-
+# 🧩 تحليلات بسيطة (اختياري)
 @app.route('/api/analytics')
 def get_analytics():
     try:
@@ -283,6 +153,8 @@ def get_analytics():
     })
 
 
+# -----------------------------------------------------------
+# تشغيل التطبيق
+# -----------------------------------------------------------
 if __name__ == '__main__':
-    # Run only for local dev. In production gunicorn will serve the app.
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)), debug=False)
