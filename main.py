@@ -1,4 +1,4 @@
-# app.py - كامل ومحدّث
+# app.py - كامل (منتجات المستخدم تصبح متاحة فورًا عند الإنشاء)
 import os
 import json
 import logging
@@ -8,19 +8,19 @@ from flask_cors import CORS
 from firebase_admin import credentials, initialize_app, firestore, auth as firebase_auth
 from dotenv import load_dotenv
 
-# تحميل متغيرات البيئة محلياً (اختياري)
+# load local .env (optional for local dev)
 load_dotenv()
 
 # logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("store-api")
 
-# إعداد Flask (serve static from SRC إذا موجود)
+# static folder (frontend files)
 STATIC_FOLDER = os.getenv("STATIC_FOLDER", "src")
 app = Flask(__name__, static_folder=STATIC_FOLDER, static_url_path='/')
 app.secret_key = os.getenv("SECRET_KEY", os.urandom(24))
 
-# CORS: يمكن تحديد متغير CORS_ORIGINS كقائمة مفصولة بفواصل
+# CORS config (set CORS_ORIGINS as comma-separated list or "*" for all)
 CORS_ORIGINS = os.getenv("CORS_ORIGINS", "*")
 if CORS_ORIGINS and CORS_ORIGINS != "*":
     origins_list = [o.strip() for o in CORS_ORIGINS.split(",") if o.strip()]
@@ -29,10 +29,10 @@ else:
 CORS(app, origins=origins_list, supports_credentials=True)
 logger.info("CORS origins: %s", origins_list)
 
-# Firebase Admin init من JSON في متغير البيئة
+# Firebase Admin initialization (expects FIREBASE_SERVICE_ACCOUNT_JSON env var)
 FIREBASE_SA_JSON = os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON")
 if not FIREBASE_SA_JSON:
-    logger.error("FIREBASE_SERVICE_ACCOUNT_JSON env var missing - cannot init Firebase Admin SDK")
+    logger.error("FIREBASE_SERVICE_ACCOUNT_JSON env var missing")
     raise RuntimeError("FIREBASE_SERVICE_ACCOUNT_JSON not set")
 
 try:
@@ -45,7 +45,7 @@ except Exception as e:
     logger.exception("Failed to initialize Firebase Admin SDK: %s", e)
     raise
 
-# Optional AI (Gemini) - آمن لو غير مفعّل
+# Optional AI config (not required)
 try:
     import google.generativeai as genai
     GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
@@ -59,11 +59,11 @@ except Exception:
     model = None
     logger.warning("google.generativeai not available or failed to configure")
 
-# Main admin UID (يمكن وضعه في متغيرات البيئة على Railway)
+# Main admin uid (put your UID in Railway env MAIN_ADMIN_UID)
 MAIN_ADMIN_UID = os.getenv("MAIN_ADMIN_UID", "").strip()
 ALLOWED_ROLES = {'admin', 'publisher', 'moderator', 'viewer'}
 
-# ------------ Helpers ------------
+# ---------------- Helpers ----------------
 def get_request_user():
     return getattr(request, 'user', None)
 
@@ -86,22 +86,22 @@ def has_role(user, role):
         return False
     return doc.get('role') == role
 
-# ------------ Auth middleware ------------
+# ---------------- Auth middleware ----------------
 @app.before_request
 def verify_token():
-    # allow OPTIONS preflight
+    # allow CORS preflight
     if request.method == 'OPTIONS':
         return
 
-    # allow public endpoints
+    # public endpoints
     if request.path.startswith('/api/public'):
         return
 
-    # allow static files and root
+    # allow static and root
     if request.path == '/' or request.path.startswith(f'/{STATIC_FOLDER}') or request.path.startswith('/static'):
         return
 
-    # allow public GET for /api/products (will return available products if unauthenticated)
+    # allow public GET on /api/products
     if request.path == '/api/products' and request.method == 'GET':
         return
 
@@ -119,7 +119,7 @@ def verify_token():
             logger.warning("Token verify failed: %s", e)
             return jsonify({"msg": f"Invalid token: {e}"}), 401
 
-# ------------ Routes: Static ------------
+# ---------------- Routes: Static ----------------
 @app.route("/")
 def index():
     try:
@@ -127,12 +127,12 @@ def index():
     except Exception:
         return jsonify({"msg": "API ready"}), 200
 
-# ------------ Products endpoints ------------
+# ---------------- Products endpoints ----------------
 @app.route("/api/products", methods=['GET', 'POST'])
 def handle_products():
     products_ref = db.collection('products')
 
-    # POST: any authenticated user can submit product -> status 'pending' + create admin_review
+    # POST: create product -> set status 'available' immediately (no admin review)
     if request.method == 'POST':
         try:
             user = get_request_user()
@@ -153,7 +153,6 @@ def handle_products():
             except Exception:
                 price = 0.0
 
-            # create product as pending (requires admin approval to become available)
             doc_data = {
                 'name': name,
                 'price': price,
@@ -162,29 +161,16 @@ def handle_products():
                 'description': data.get('description', ''),
                 'creator_uid': user.get('uid'),
                 'added_by': user.get('email'),
-                'status': 'pending',
+                'status': 'available',   # available immediately
                 'created_at': firestore.SERVER_TIMESTAMP
             }
 
             added = products_ref.add(doc_data)
             ref = added[1] if isinstance(added, (list,tuple)) else added
-            # fetch snapshot (may not include server timestamp converted yet)
             new_product = ref.get().to_dict() or {}
             new_product['id'] = ref.id
 
-            # create admin review request doc (id = product id)
-            review_ref = db.collection('admin_reviews').document(ref.id)
-            # store small snapshot & metadata for admin convenience
-            review_ref.set({
-                'product_id': ref.id,
-                'creator_uid': user.get('uid'),
-                'creator_email': user.get('email'),
-                'status': 'pending',
-                'created_at': firestore.SERVER_TIMESTAMP,
-                'product_snapshot': new_product
-            })
-
-            return jsonify({"msg":"Product submitted for review","product": new_product}), 201
+            return jsonify({"msg":"Product created","product": new_product}), 201
 
         except Exception as e:
             tb = traceback.format_exc()
@@ -229,7 +215,7 @@ def product_detail(product_id):
     product = doc.to_dict()
     user = get_request_user()
 
-    # GET: anyone authenticated (or public via /api/products) can fetch detail
+    # GET
     if request.method == 'GET':
         product['id'] = doc.id
         if 'created_at' in product and product['created_at']:
@@ -259,14 +245,9 @@ def product_detail(product_id):
 
     if request.method == 'DELETE':
         ref.delete()
-        # also remove review doc if exists
-        try:
-            db.collection('admin_reviews').document(product_id).delete()
-        except Exception:
-            pass
         return '', 204
 
-# Approve / Reject (admin only) - also update admin_reviews
+# Approve / Reject remain for admin if you still want them (not used if auto-available)
 @app.route("/api/products/<string:product_id>/approve", methods=['POST'])
 def approve_product(product_id):
     user = get_request_user()
@@ -280,15 +261,6 @@ def approve_product(product_id):
         'approved_by': user.get('uid'),
         'approved_at': firestore.SERVER_TIMESTAMP
     })
-    # update admin_reviews doc
-    try:
-        db.collection('admin_reviews').document(product_id).update({
-            'status': 'approved',
-            'handled_by': user.get('uid'),
-            'handled_at': firestore.SERVER_TIMESTAMP
-        })
-    except Exception:
-        logger.exception("Failed to update admin_reviews on approve")
     return jsonify({"msg":"Product approved"}), 200
 
 @app.route("/api/products/<string:product_id>/reject", methods=['POST'])
@@ -306,20 +278,12 @@ def reject_product(product_id):
         'rejected_by': user.get('uid'),
         'rejected_at': firestore.SERVER_TIMESTAMP
     })
-    try:
-        update = {
-            'status': 'rejected',
-            'handled_by': user.get('uid'),
-            'handled_at': firestore.SERVER_TIMESTAMP
-        }
-        if reason:
-            update['rejection_reason'] = reason
-        db.collection('admin_reviews').document(product_id).update(update)
-    except Exception:
-        logger.exception("Failed to update admin_reviews on reject")
+    # optionally store rejection reason in document
+    if reason:
+        ref.update({'rejection_reason': reason})
     return jsonify({"msg":"Product rejected"}), 200
 
-# ------------ My products (for dashboard) ------------
+# My products (for dashboard)
 @app.route("/api/my/products", methods=['GET'])
 def my_products():
     user = get_request_user()
@@ -341,28 +305,7 @@ def my_products():
         logger.exception("Failed to fetch my products")
         return jsonify({"msg":"Failed to fetch products","error":str(e)}), 500
 
-# ------------ Admin reviews endpoint ------------
-@app.route("/api/admin/reviews", methods=['GET'])
-def admin_reviews():
-    user = get_request_user()
-    if not user or not has_role(user, 'admin'):
-        return jsonify({"msg":"Forbidden"}), 403
-    try:
-        docs = db.collection('admin_reviews').order_by('created_at', direction=firestore.Query.DESCENDING).stream()
-        reviews = []
-        for doc in docs:
-            r = doc.to_dict()
-            r['id'] = doc.id
-            if 'created_at' in r and r['created_at']:
-                try: r['created_at'] = r['created_at'].timestamp()
-                except: pass
-            reviews.append(r)
-        return jsonify(reviews), 200
-    except Exception as e:
-        logger.exception("Failed to fetch reviews")
-        return jsonify({"msg":"Failed to fetch reviews","error":str(e)}), 500
-
-# ------------ Public products endpoint (compat) ------------
+# Public products endpoint
 @app.route("/api/public/products", methods=['GET'])
 def public_products():
     try:
@@ -375,14 +318,12 @@ def public_products():
                 try: p['created_at'] = p['created_at'].timestamp()
                 except: pass
             products.append(p)
-        if not products:
-            return jsonify({"msg":"No available products","data": []}), 200
         return jsonify(products), 200
     except Exception as e:
         logger.exception("Failed to fetch public products")
         return jsonify({"msg":"Failed to fetch public products","error":str(e)}), 500
 
-# ------------ Analytics & AI (unchanged placeholders) ------------
+# Analytics (placeholder)
 @app.route("/api/analytics", methods=['GET'])
 def get_analytics():
     try:
@@ -399,6 +340,7 @@ def get_analytics():
         logger.exception("analytics error")
         return jsonify({"msg":"Failed to get analytics","error":str(e)}), 500
 
+# AI description (optional)
 @app.route("/api/generate-description", methods=['POST'])
 def generate_ai_description():
     if model is None:
@@ -414,7 +356,7 @@ def generate_ai_description():
         logger.exception("AI generation failed")
         return jsonify({"msg":"AI generation failed","error":str(e)}), 500
 
-# ------------ Admin user management (unchanged) ------------
+# Admin user management
 @app.route("/api/admin/create_user", methods=['POST'])
 def admin_create_user():
     user = get_request_user()
@@ -473,7 +415,7 @@ def admin_update_user(uid):
         logger.exception("user update failed")
         return jsonify({"msg":"Failed to update user","error":str(e)}), 500
 
-# ------------ Cleanup (admin only) ------------
+# Cleanup (admin only)
 @app.route("/api/cleanup-old-products", methods=['POST'])
 def cleanup_old_products():
     user = get_request_user()
@@ -490,6 +432,6 @@ def cleanup_old_products():
         logger.exception("cleanup failed")
         return jsonify({"msg":"Cleanup failed","error":str(e)}), 500
 
-# ------------ Run ------------
+# Run
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)), debug=False)
