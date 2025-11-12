@@ -8,27 +8,49 @@ from flask_cors import CORS
 from firebase_admin import credentials, initialize_app, firestore, auth as firebase_auth
 from dotenv import load_dotenv
 
-# load local .env (optional for local dev)
+# ------------------------------------------------------
+# تحميل المتغيرات والتهيئة
+# ------------------------------------------------------
 load_dotenv()
-
-# logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("store-api")
 
-# static folder (frontend files)
 STATIC_FOLDER = os.getenv("STATIC_FOLDER", "src")
-app = Flask(__name__, static_folder=STATIC_FOLDER, static_url_path='/')
+app = Flask(__name__, static_folder=STATIC_FOLDER, static_url_path="/")
 app.secret_key = os.getenv("SECRET_KEY", os.urandom(24))
 
-# CORS config (set CORS_ORIGINS as comma-separated list or "*" for all)
-CORS_ORIGINS = os.getenv("CORS_ORIGINS", "*")
-if CORS_ORIGINS and CORS_ORIGINS != "*":
-    origins_list = [o.strip() for o in CORS_ORIGINS.split(",") if o.strip()]
-else:
-    origins_list = "*"
-# Initialize flask-cors (basic)
-CORS(app, origins=origins_list, supports_credentials=True)
-logger.info("CORS origins: %s", origins_list)
+# ------------------------------------------------------
+# إعداد CORS (الإصلاح النهائي)
+# ------------------------------------------------------
+# دومين موقعك على Netlify:
+NETLIFY_ORIGIN = os.getenv("NETLIFY_ORIGIN", "https://md-market.netlify.app")
+
+CORS(
+    app,
+    resources={r"/api/*": {"origins": [NETLIFY_ORIGIN, "http://localhost:5500", "http://127.0.0.1:5500"]}},
+    supports_credentials=True,
+)
+
+@app.after_request
+def add_cors_headers(response):
+    """
+    يضيف رؤوس CORS لضمان عمل الطلبات من المتصفح
+    """
+    origin = request.headers.get("Origin")
+    allowed_origins = [NETLIFY_ORIGIN, "http://localhost:5500", "http://127.0.0.1:5500"]
+
+    if origin in allowed_origins:
+        response.headers["Access-Control-Allow-Origin"] = origin
+    else:
+        response.headers["Access-Control-Allow-Origin"] = NETLIFY_ORIGIN
+
+    response.headers["Access-Control-Allow-Credentials"] = "true"
+    response.headers["Access-Control-Allow-Methods"] = "GET,POST,PUT,DELETE,OPTIONS"
+    response.headers["Access-Control-Allow-Headers"] = "Content-Type,Authorization"
+    return response
+
+logger.info(f"CORS enabled for {NETLIFY_ORIGIN}")
+
 
 # --- Ensure robust CORS headers on every response (extra safety) ---
 @app.after_request
