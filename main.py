@@ -1,8 +1,9 @@
-# app.py - كامل (منتجات المستخدم تصبح متاحة فورًا عند الإنشاء)
+# app.py - كامل (معدل: يضمن رؤوس CORS إضافية وroute للاختبار)
 import os
 import json
 import logging
 import traceback
+from urllib.parse import urlparse
 from flask import Flask, request, jsonify
 from flask_cors import CORS
 from firebase_admin import credentials, initialize_app, firestore, auth as firebase_auth
@@ -26,8 +27,46 @@ if CORS_ORIGINS and CORS_ORIGINS != "*":
     origins_list = [o.strip() for o in CORS_ORIGINS.split(",") if o.strip()]
 else:
     origins_list = "*"
+# Initialize flask-cors (basic)
 CORS(app, origins=origins_list, supports_credentials=True)
 logger.info("CORS origins: %s", origins_list)
+
+# --- Ensure robust CORS headers on every response (extra safety) ---
+@app.after_request
+def add_cors_headers(response):
+    """
+    Add Access-Control-Allow-* headers robustly.
+    Uses `origins_list` defined above to allow only permitted origins,
+    or reflects Origin if origins_list == "*".
+    """
+    try:
+        origin = request.headers.get('Origin')
+        # If configured wildcard, allow the incoming origin or "*" if none provided
+        if origins_list == "*" or origins_list == ['*']:
+            # reflect origin if present, otherwise allow all
+            response.headers['Access-Control-Allow-Origin'] = origin or '*'
+        else:
+            if origin:
+                # exact match check
+                for allowed in origins_list:
+                    if allowed == origin:
+                        response.headers['Access-Control-Allow-Origin'] = origin
+                        break
+                    # also allow match by hostname (in case allowed stored without protocol)
+                    try:
+                        ao = urlparse(allowed).netloc or allowed
+                        if ao and ao in origin:
+                            response.headers['Access-Control-Allow-Origin'] = origin
+                            break
+                    except Exception:
+                        continue
+        # common CORS headers (make sure headers match what frontend may send)
+        response.headers['Access-Control-Allow-Credentials'] = 'true'
+        response.headers['Access-Control-Allow-Methods'] = 'GET,POST,PUT,DELETE,OPTIONS'
+        response.headers['Access-Control-Allow-Headers'] = 'Content-Type,Authorization'
+    except Exception as e:
+        logger.exception("after_request CORS header set failed: %s", e)
+    return response
 
 # Firebase Admin initialization (expects FIREBASE_SERVICE_ACCOUNT_JSON env var)
 FIREBASE_SA_JSON = os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON")
@@ -322,6 +361,18 @@ def public_products():
     except Exception as e:
         logger.exception("Failed to fetch public products")
         return jsonify({"msg":"Failed to fetch public products","error":str(e)}), 500
+
+# Test route for CORS diagnostics (temporary)
+@app.route("/api/_test_cors", methods=['GET', 'OPTIONS'])
+def test_cors():
+    """
+    Simple route to check CORS headers and origin detection in browser.
+    Open from frontend domain and check Network/Console for Access-Control-Allow-Origin header.
+    """
+    return jsonify({
+        "ok": True,
+        "origin_received": request.headers.get('Origin')
+    }), 200
 
 # Analytics (placeholder)
 @app.route("/api/analytics", methods=['GET'])
