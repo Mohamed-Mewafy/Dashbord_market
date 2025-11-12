@@ -1,4 +1,3 @@
-# app.py - كامل (معدل: يضمن رؤوس CORS إضافية وroute للاختبار)
 import os
 import json
 import logging
@@ -200,7 +199,7 @@ def handle_products():
                 'description': data.get('description', ''),
                 'creator_uid': user.get('uid'),
                 'added_by': user.get('email'),
-                'status': 'available',   # available immediately
+                'status': 'available',    # available immediately
                 'created_at': firestore.SERVER_TIMESTAMP
             }
 
