@@ -53,14 +53,20 @@ app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", os.urandom(24))
 # -----------------------------------------------------------
 # إعدادات CORS للسماح باتصال InfinityFree وVercel
 # -----------------------------------------------------------
+from flask_cors import CORS
+
+# لو عايز السماح للمواقع المعينة فقط (أمن أكثر)، ضع دومينك بدل "*"
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",
-    "https://your-site.vercel.app",
-    "https://ports3low.epizy.com",  # 🔥 موقعك على InfinityFree
-    "https://*.epizy.com"
+    "https://web-production-893b5.up.railway.app",  # إن احتجت
+    "https://bin-sports3low.epizy.com",              # دومين InfinityFree
+    "https://ports3low.epizy.com"
 ]
 
-app.config['CORS_HEADERS'] = 'Content-Type'
+# مؤقتًا للتجربة: اسمح لكل المواقع (غير آمن طويل الأمد)
+# CORS(app, origins="*")
+
+# أو السماح لقائمة محددة:
 CORS(app, origins=CORS_ALLOWED_ORIGINS, supports_credentials=True)
 # -----------------------------------------------------------
 
