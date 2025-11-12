@@ -1,75 +1,75 @@
+# app.py - نسخة آمنة لإعادة التشغيل السريع
 import os
 import json
 import random
 import firebase_admin
 from firebase_admin import credentials, firestore, auth
-from flask import Flask, jsonify, request, send_from_directory
+from flask import Flask, jsonify, request
 from flask_cors import CORS
 from dotenv import load_dotenv
 
 load_dotenv()
 
-# ---------------- Firebase init ----------------
+# -------- Firebase init (من متغيرات البيئة أو ملف)
 FIREBASE_SA_JSON = os.getenv("FIREBASE_SERVICE_ACCOUNT_JSON")
 if FIREBASE_SA_JSON:
     sa_info = json.loads(FIREBASE_SA_JSON)
     cred = credentials.Certificate(sa_info)
 else:
     cred_path = os.getenv("FIREBASE_SERVICE_ACCOUNT_PATH", "firebase-service-account.json")
-    if not os.path.exists(cred_path):
+    if os.path.exists(cred_path):
+        cred = credentials.Certificate(cred_path)
+    else:
+        # إذا لم توجد بيانات الخدمة فلن نستطيع استخدام Firestore - نرفع خطأ واضح
         raise RuntimeError("Firebase service account not found. Set FIREBASE_SERVICE_ACCOUNT_JSON or provide firebase-service-account.json")
-    cred = credentials.Certificate(cred_path)
 
 if not firebase_admin._apps:
     firebase_admin.initialize_app(cred)
 
 db = firestore.client()
 
-# ---------------- Flask app (serve static dashboard) ----------------
-# افترض أن ملفات الواجهة موجودة في مجلد 'src' داخل المشروع
-STATIC_FOLDER = os.getenv("STATIC_FOLDER", "src")  # غيّر لو عندك اسم مجلد مختلف
+# -------- Flask app (serve static files if موجودة)
+STATIC_FOLDER = os.getenv("STATIC_FOLDER", "src")  # غيّر لو واجهتك مجلد مختلف
 app = Flask(__name__, static_folder=STATIC_FOLDER, static_url_path='/')
 app.config["SECRET_KEY"] = os.getenv("SECRET_KEY", os.urandom(24))
 
-# ---------------- CORS ----------------
+# -------- CORS (سماح للدومينات الشائعة)
 CORS_ALLOWED_ORIGINS = [
     "http://localhost:3000",
     "http://127.0.0.1:5500",
-    # أضف دومينات الواجهات اللي تستخدمها
     "https://bin-sports3low.epizy.com",
     "https://ports3low.epizy.com",
-    "https://your-site.vercel.app",
 ]
 CORS(app, origins=CORS_ALLOWED_ORIGINS, supports_credentials=True)
 
-# ---------------- Serve dashboard pages ----------------
-# Serve the dashboard index at root. If you prefer /dashboard, change route accordingly.
+# -------- Serve dashboard index if static files موجودة
 @app.route('/', methods=['GET'])
 def serve_index():
-    # إذا كان لديك index.html داخل مجلد static_folder (مثلاً src/index.html)
-    return app.send_static_file('index.html')
+    # لو index.html موجود داخل مجلد STATIC_FOLDER سيتم إرساله
+    try:
+        return app.send_static_file('index.html')
+    except Exception:
+        return jsonify({"msg": "API ready"}), 200
 
-# Optional: also serve dashboard under /dashboard for clarity
 @app.route('/dashboard', methods=['GET'])
 def serve_dashboard():
-    return app.send_static_file('index.html')
+    try:
+        return app.send_static_file('index.html')
+    except Exception:
+        return jsonify({"msg": "Dashboard not found"}), 404
 
-# If you have other static assets in subpaths (css/js/images) Flask will already serve them
-# because we set static_folder and static_url_path='/' above.
-
-# ---------------- API endpoints (unchanged) ----------------
-
+# -------- Health
 @app.route('/api/health')
 def health():
     return jsonify({"msg": "API يعمل بنجاح 🎉"})
 
+# -------- Products endpoints (GET عام، POST محمي)
 @app.route('/api/products', methods=['GET', 'POST'])
 def products_handler():
     products_ref = db.collection('products')
 
     if request.method == 'GET':
         try:
-            # حاول ترتيب حسب created_at وإذا فشل اعمل fallback
             try:
                 docs = list(products_ref.order_by('created_at', direction=firestore.Query.DESCENDING).stream())
             except Exception:
@@ -88,7 +88,7 @@ def products_handler():
         except Exception as e:
             return jsonify({"msg": f"خطأ في جلب المنتجات: {e}"}), 500
 
-    # POST -> إضافة منتج (محمي بتوكن Firebase)
+    # POST يتطلب Firebase ID token
     if request.method == 'POST':
         auth_header = request.headers.get('Authorization')
         if not auth_header or not auth_header.startswith('Bearer '):
@@ -107,7 +107,6 @@ def products_handler():
         except Exception as e:
             return jsonify({"msg": "Failed to create product", "error": str(e)}), 500
 
-
 @app.route('/api/products/<string:product_id>', methods=['GET', 'PUT', 'DELETE'])
 def product_item(product_id):
     product_ref = db.collection('products').document(product_id)
@@ -115,17 +114,17 @@ def product_item(product_id):
     if not doc.exists:
         return jsonify({"msg": "Product not found"}), 404
 
-    product_data = doc.to_dict()
+    data = doc.to_dict()
     if request.method == 'GET':
-        product_data['id'] = doc.id
-        if 'created_at' in product_data and product_data['created_at']:
+        data['id'] = doc.id
+        if 'created_at' in data and data['created_at']:
             try:
-                product_data['created_at'] = product_data['created_at'].timestamp()
+                data['created_at'] = data['created_at'].timestamp()
             except Exception:
                 pass
-        return jsonify(product_data)
+        return jsonify(data)
 
-    # For update/delete require owner auth
+    # PUT/DELETE -> محمي
     auth_header = request.headers.get('Authorization')
     if not auth_header or not auth_header.startswith('Bearer '):
         return jsonify({"msg": "Unauthorized"}), 401
@@ -135,7 +134,7 @@ def product_item(product_id):
     except Exception as e:
         return jsonify({"msg": f"Invalid token: {e}"}), 401
 
-    is_owner = product_data.get('creator_uid') == decoded.get('uid')
+    is_owner = data.get('creator_uid') == decoded.get('uid')
     if not is_owner:
         return jsonify({"msg": "Forbidden: not owner"}), 403
 
@@ -157,6 +156,6 @@ def product_item(product_id):
         product_ref.delete()
         return '', 204
 
-# ---------------- run ----------------
+# -------- run
 if __name__ == '__main__':
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
